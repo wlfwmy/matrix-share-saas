@@ -1,0 +1,21 @@
+# 依赖
+node_modules/
+frontend/node_modules/
+
+# 构建产物
+dist/
+frontend/dist/
+
+# 环境变量（含密钥）
+.env
+
+# 运行时
+temp/
+logs/
+*.db
+*.db-journal
+
+# 系统
+.DS_Store
+Thumbs.db
+*.log

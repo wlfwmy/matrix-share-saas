@@ -1,0 +1,71 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  credits   Int      @default(10)
+  createdAt DateTime @default(now())
+  accounts  Account[]
+  orders    Order[]
+  tasks     Task[]
+}
+
+model Account {
+  id               String   @id @default(uuid())
+  userId           String
+  platform         String   // "RED" | "DOUYIN" | "KUAISHOU" | "BILIBILI" | "WECHAT"
+  openid           String   @unique
+  nickname         String
+  avatar           String?
+  encryptedAccess  String
+  encryptedRefresh String
+  expiresAt        DateTime
+  createdAt        DateTime @default(now())
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Order {
+  id         String   @id              // order_ 或 wxorder_ 唯一单号
+  userId     String
+  planId     String                    // "gold" | "diamond"
+  amount     Float
+  payChannel String                   // "ALIPAY" | "WECHAT"
+  status     String   @default("PENDING") // "PENDING" | "PAID" | "FAILED"
+  createdAt  DateTime @default(now())
+  payTime    DateTime?
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Task {
+  id          String   @id              // task_xxxx
+  userId      String
+  title       String
+  description String
+  videoUrl    String
+  status      String   @default("QUEUED") // "QUEUED" | "PROCESSING" | "SUCCESS" | "FAILED"
+  errorMsg    String?
+  createdAt   DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model DailyAnalytics {
+  id        String   @id @default(uuid())
+  userId    String
+  date      DateTime
+  platform  String   // "RED" | "DOUYIN" | "KUAISHOU" | "BILIBILI" | "WECHAT"
+  views     Int      @default(0)
+  likes     Int      @default(0)
+  comments  Int      @default(0)
+  shares    Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, date, platform])
+}
