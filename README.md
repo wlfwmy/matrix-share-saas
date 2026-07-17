@@ -9,6 +9,7 @@
 - [技术栈](#技术栈)
 - [项目结构](#项目结构)
 - [快速开始](#快速开始)
+- [小红书浏览器登录](#小红书浏览器登录)
 - [环境变量参考](#环境变量参考)
 - [API 文档](#api-文档)
 - [生产部署](#生产部署)
@@ -23,7 +24,8 @@
 
 | 功能 | 说明 |
 |------|------|
-| **多平台 OAuth 绑定** | 小红书 · 抖音 · 快手 · B站 · 微信视频号，标准 OAuth 2.0 授权流程 |
+| **多平台 OAuth 绑定** | 抖音 · 快手 · B站 · 微信视频号，标准 OAuth 2.0 授权流程 |
+| **小红书浏览器登录** | 创作者中心无公开 API，使用 Playwright + 系统 Edge 浏览器自动化采集 |
 | **视频矩阵分发** | 单次上传，同时分发到多个已绑定的平台账号 |
 | **智能去重转码** | FFmpeg 流水线：微裁剪 + 色彩扰动 + 极微旋转 + 半透明水印 + 音视频微调速，规避平台查重 |
 | **Token 自动续期** | 后台定时检查，自动刷新各平台 Access Token，无需人工干预 |
@@ -34,13 +36,15 @@
 
 | 平台 | 接入方式 | 当前能力 |
 |------|---------|---------|
-| 小红书 | 开放平台 API | OAuth 绑定 + 视频发布 |
-| 抖音 | 开放平台 API | OAuth 绑定 + 视频发布 |
-| 快手 | 开放平台 API | OAuth 绑定 + 视频发布 |
-| B站 | 开放平台 API | OAuth 绑定 + 视频发布 |
+| 小红书 | **浏览器自动化**（Playwright + Edge CDP） | 数据看板自动采集 |
+| 抖音 | 开放平台 API | OAuth 绑定 + 视频发布 + 数据采集 |
+| 快手 | 开放平台 API | OAuth 绑定 + 视频发布 + 数据采集 |
+| B站 | 开放平台 API | OAuth 绑定 + 视频发布 + 数据采集 |
 | 微信视频号 | 第三方平台 | OAuth 绑定 + 视频发布 |
 
-> 数据看板已支持自动采集抖音/B站/快手的数据（播放/点赞/评论/分享），每日定时拉取。小红书和微信暂无可用的公开数据 API。
+> **小红书说明**：小红书开放平台暂不支持数据类 API，且创作者中心采用 SSO + localStorage 登录态。
+> 本项目使用 Playwright 启动系统 Edge 浏览器，通过 CDP 协议连接，从 Dashboard DOM 中提取指标数据。
+> 登录态保存在 `edge-profile/` 目录，一次登录后续重启服务自动恢复。
 
 ### 去重转码流水线
 
@@ -95,6 +99,11 @@
 │  │ Token 续期服务    │  │  支付服务         │             │
 │  │ (定时刷新)        │  │  支付宝+微信支付   │             │
 │  └──────────────────┘  └──────────────────┘             │
+│                                                         │
+│  ┌──────────────────┐                                   │
+│  │ 小红书浏览器采集   │  ← Playwright + Edge CDP         │
+│  │ browserManager.ts│     常驻进程，Dashboard DOM 提取   │
+│  └──────────────────┘                                   │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -111,6 +120,7 @@
 | **缓存** | ioredis | 内存 Map 模拟 | Redis |
 | **存储** | 阿里云 OSS | 同左 | 同左 |
 | **视频处理** | fluent-ffmpeg + FFmpeg | 同左 | 同左 |
+| **浏览器自动化** | Playwright + 系统 Edge | 同左 | 同左 |
 | **支付** | alipay-sdk + wechatpay-node-v3 | 沙箱模式 | 正式商户 |
 | **进程管理** | — | tsx watch | PM2 cluster |
 
@@ -124,33 +134,39 @@ matrix-share-saas/
 ├── frontend/                    # React 前端
 │   └── src/
 │       ├── api/
-│       │   └── client.ts        # Axios 封装 + 拦截器
+│       │   └── client.ts        # API 客户端
 │       ├── components/
 │       │   ├── Layout.tsx       # 页面布局外壳
 │       │   ├── PublishPanel.tsx # 发布面板（上传+选账号+分发）
 │       │   └── AccountCard.tsx  # 账号卡片组件
 │       └── pages/
 │           ├── Publish.tsx      # 发布页
-│           ├── Bind.tsx         # 账号绑定页
+│           ├── Bind.tsx         # 账号绑定页（含小红书浏览器登录）
 │           ├── Billing.tsx      # 充值页
 │           ├── Dashboard.tsx    # 数据看板
 │           └── OAuthCallback.tsx # OAuth 回调中转页
 │
 ├── prisma/
 │   └── schema.prisma            # 数据模型定义
-│       ├── Account             # 平台账号
-│       ├── PublishRecord       # 发布记录
-│       ├── DailyAnalytics      # 每日数据聚合
-│       └── Order               # 支付订单
 │
 ├── src/
 │   ├── adapters/                # 各平台 OAuth 适配器
-│   │   ├── types.ts             # PlatformOAuthAdapter 接口定义
-│   │   ├── red.adapter.ts       # 小红书
-│   │   ├── douyin.adapter.ts    # 抖音
-│   │   ├── kuaishou.adapter.ts  # 快手
-│   │   ├── bilibili.adapter.ts  # B站
-│   │   └── wechat.adapter.ts    # 微信视频号
+│   │   └── ...                  # douyin / kuaishou / bilibili / wechat
+│   │
+│   ├── collectors/              # 浏览器自动化采集器
+│   │   └── red.collector.ts     # 小红书 Dashboard 数据提取
+│   │
+│   ├── services/
+│   │   ├── browserManager.ts    # Edge 浏览器生命周期管理 + CDP 连接
+│   │   ├── transcoder.service.ts   # FFmpeg 转码+去重
+│   │   ├── tokenRefresher.ts       # Token 自动续期
+│   │   ├── dataCollector.ts        # 定时数据采集调度
+│   │   ├── analytics.service.ts    # 数据统计服务
+│   │   └── mock.service.ts         # 开发环境模拟发布
+│   │
+│   ├── queues/
+│   │   ├── publish.queue.ts    # 队列定义（dev=内存/prod=BullMQ）
+│   │   └── publish.worker.ts   # 消费者（转码→发布）
 │   │
 │   ├── controllers/
 │   │   ├── oauth.router.controller.ts  # 统一 OAuth 路由
@@ -158,30 +174,20 @@ matrix-share-saas/
 │   │   ├── payment.controller.ts       # 支付宝支付
 │   │   └── wx.payment.controller.ts    # 微信支付
 │   │
-│   ├── queues/
-│   │   ├── publish.queue.ts    # 队列定义（dev=内存/prod=BullMQ）
-│   │   └── publish.worker.ts   # 消费者（转码→发布）
-│   │
-│   ├── services/
-│   │   ├── transcoder.service.ts   # FFmpeg 转码+去重
-│   │   ├── tokenRefresher.ts       # Token 自动续期
-│   │   ├── analytics.service.ts    # 数据统计服务
-│   │   └── mock.service.ts         # 开发环境模拟发布
-│   │
 │   ├── middleware/
 │   │   └── auth.ts              # JWT 鉴权中间件
 │   │
-│   ├── utils/
-│   │   ├── prismaClient.ts      # Prisma 客户端单例
-│   │   ├── redis.ts             # Redis 客户端（dev=内存模拟）
-│   │   ├── crypto.ts            # Token 加解密
-│   │   └── appError.ts          # 标准化错误类 + 错误处理器
+│   ├── utils/                   # 工具库
+│   │   ├── prismaClient.ts
+│   │   ├── redis.ts
+│   │   ├── crypto.ts
+│   │   └── appError.ts
 │   │
 │   └── index.ts                 # 应用入口 + 路由注册
 │
-├── .env.example                  # 环境变量模板（含注释）
+├── edge-profile/                 # Edge 浏览器持久化配置（含登录态，已 gitignore）
+├── .env.example                  # 环境变量模板
 ├── ecosystem.config.js           # PM2 集群配置
-├── README.md                     # 本文件
 └── docs/
     └── operation-manual.md       # 操作手册
 ```
@@ -195,10 +201,14 @@ matrix-share-saas/
 - Node.js 18+
 - npm 9+
 - FFmpeg（可选，开发环境使用模拟发布可跳过）
+- **Microsoft Edge**（系统自带即可，用于小红书浏览器自动化）
 
-### 1. 安装依赖
+### 1. 克隆并安装依赖
 
 ```bash
+git clone https://github.com/wlfwmy/matrix-share-saas.git
+cd matrix-share-saas
+
 # 后端
 npm install
 
@@ -212,7 +222,15 @@ cd frontend && npm install && cd ..
 cp .env.example .env
 ```
 
-编辑 `.env`，至少设置 `JWT_SECRET` 和 `TOKEN_ENCRYPT_KEY`，其余可在需要时配置。
+编辑 `.env`，至少设置以下三项，其余可按需配置：
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `JWT_SECRET` | JWT 签名密钥 | 开发有默认值，生产必须换 |
+| `TOKEN_ENCRYPT_KEY` | Token 加密密钥 | **必须改为 32 位字符** |
+| `ALI_ACCESS_KEY_ID` / `ALI_ACCESS_KEY_SECRET` | 阿里云 OSS 密钥 | 上传视频需要 |
+
+> 小红书数据采集无需任何环境变量配置，直接浏览器登录即可。
 
 ### 3. 初始化数据库
 
@@ -224,7 +242,14 @@ npx prisma generate
 npx prisma db push
 ```
 
-### 4. 启动开发服务
+### 4. 安装 Playwright 浏览器
+
+```bash
+# 安装 Chromium（用于 Cookie 模式的浏览器上下文，可选）
+npx playwright install chromium
+```
+
+### 5. 启动开发服务
 
 ```bash
 # 终端 1：后端（端口 3000）
@@ -237,6 +262,34 @@ cd frontend && npm run dev
 访问 http://localhost:5173
 
 > 开发环境下，后端使用内存队列、内存 Redis 模拟、SQLite 数据库，无需安装 Redis 和 PostgreSQL。
+
+---
+
+## 小红书浏览器登录
+
+小红书是唯一不使用 OAuth 的平台。因为小红书开放平台不提供数据 API，且创作者中心采用 SSO + localStorage 登录态，本系统使用 Playwright + 系统 Edge 浏览器 实现自动化数据采集。
+
+### 首次登录
+
+1. 启动服务后，打开前端 http://localhost:5173
+2. 进入「账号绑定」页面
+3. 找到小红书卡片，点击「登录」按钮
+4. 系统会自动打开一个 Edge 浏览器窗口，导航到创作者中心登录页
+5. 在浏览器窗口中扫码登录（或使用手机号验证码登录）
+6. 登录成功后，前端会自动检测到状态变为「已登录」
+
+### 登录态持久化
+
+- 登录信息保存在项目根目录的 `edge-profile/` 中（已加入 `.gitignore`）
+- **服务重启后无需重新登录**，Edge 浏览器会复用该配置目录
+- 浏览器进程在服务运行期间保持打开，请勿手动关闭 Edge 窗口
+- 如需更换账号，可在前端点击「登录」重新打开浏览器窗口登出后换号
+
+### 数据采集
+
+- 系统每 6 小时自动从创作者中心 Dashboard 提取指标数据
+- 支持采集的指标：曝光数、观看数、点赞数、评论数、收藏数、分享数、净涨粉、粉丝数、关注数
+- 采集到的数据会存入数据库，可在数据看板查看趋势
 
 ---
 
@@ -272,11 +325,12 @@ cd frontend && npm run dev
 
 | 平台 | 变量名前缀 | 托管地址 |
 |------|-----------|---------|
-| 小红书 | `RED_` | https://open.xiaohongshu.com |
 | 抖音 | `DOUYIN_` | https://open.douyin.com |
 | 快手 | `KUAISHOU_` | https://open.kuaishou.com |
 | B站 | `BILIBILI_` | https://openhome.bilibili.com |
 | 微信 | `WX_COMPONENT_` | https://open.weixin.qq.com |
+
+> 小红书不需要配置开放平台密钥，使用浏览器自动化方案。
 
 ### 支付
 
@@ -295,6 +349,30 @@ cd frontend && npm run dev
 
 > 开发环境下未传 Token 自动使用 `dev_user` 用户，方便调试。
 
+### 小红书登录管理
+
+#### 获取登录状态
+
+```
+GET /api/platform/red/status
+```
+
+返回：
+```json
+{
+  "platform": "RED",
+  "loginStatus": "ok"   // ok | need_login | expired | unknown
+}
+```
+
+#### 打开浏览器等待登录
+
+```
+POST /api/platform/red/login
+```
+
+返回后浏览器窗口已打开，用户在浏览器中完成登录后系统自动检测。
+
 ### 账号管理
 
 #### 获取 OAuth 授权链接
@@ -303,7 +381,7 @@ cd frontend && npm run dev
 GET /api/oauth/:platform/auth-url
 ```
 
-平台：`red` `douyin` `kuaishou` `bilibili` `wechat`
+平台：`douyin` `kuaishou` `bilibili` `wechat`
 
 #### OAuth 回调（服务端中转）
 
@@ -313,7 +391,7 @@ Content-Type: application/json
 
 {
   "code": "授权码",
-  "platform": "RED",
+  "platform": "DOUYIN",
   "state": "状态参数（可选）"
 }
 ```
@@ -438,41 +516,45 @@ server {
 }
 ```
 
+### 生产环境注意事项
+
+- 小红书浏览器自动化需要服务器有桌面环境（或 Xvfb），纯 CLI 服务器无法使用 `headless: false`
+- 生产环境建议将 Edge 浏览器配置为 `headless: true`（修改 `browserManager.ts`）
+- 如需多人共用，小红书需切换到扫码登录或 Cookie 方式
+
 ---
 
 ## 朋友接入清单
 
-以下是你朋友需要完成的配置，按优先级排列：
+### 基础（clone 即用）
 
-### P0 — 核心必须
+- [x] **Node.js 18+ / npm**
+- [x] **Microsoft Edge**（系统自带）
+- [x] **克隆项目** `git clone ... && npm install`
+- [ ] **配置 `.env`** — 至少设置 `JWT_SECRET` 和 `TOKEN_ENCRYPT_KEY`
+- [ ] **初始化数据库** — `npx prisma generate && npx prisma db push`
+- [ ] **启动前后端** — 两个终端分别跑 `npm run dev`
 
-- [ ] **阿里云 OSS 配置**
-  - 创建 OSS Bucket
-  - 获取 AccessKey ID / Secret
-  - 配置 CORS 允许前端直传
-  - 填入 `.env` 的 `ALI_*` 字段
+### 小红书（5 分钟搞定）
 
-- [ ] **各平台开放平台注册**
-  - 小红书、抖音、快手、B站、微信
-  - 获取 Client ID / Secret
-  - 配置回调 URL（需 HTTPS）
+- [ ] **点「登录」按钮** — 前端绑定页 → 小红书卡片 → 登录
+- [ ] **Edge 浏览器弹出来** — 扫码登录创作者中心
+- [ ] **自动采集** — 登录后每 6 小时自动拉取数据
 
-- [ ] **域名 + HTTPS**
-  - 购买域名 / 备案
-  - 配置 SSL 证书
-  - Nginx 反向代理
+### 其他平台
 
-### P1 — 支付
+- [ ] **阿里云 OSS** — 创建 Bucket，配 CORS，填入 `.env`
+- [ ] **抖音开放平台** — 注册应用，获取 `DOUYIN_CLIENT_KEY/SECRET`
+- [ ] **快手开放平台** — 注册应用，获取 `KUAISHOU_APP_ID/SECRET`
+- [ ] **B站开放平台** — 注册应用，获取 `BILIBILI_CLIENT_ID/SECRET`
+- [ ] **域名 + HTTPS** — 回调地址需要公网可访问
 
-- [ ] **支付宝商户号**（可选，上付费套餐时必需）
-- [ ] **微信支付商户号**（可选）
+### 支付 / 生产（可选）
 
-### P2 — 生产环境升级
-
-- [ ] 部署 PostgreSQL（替换 SQLite）
-- [ ] 部署 Redis（替换内存模拟）
-- [ ] 更换 JWT_SECRET 和 TOKEN_ENCRYPT_KEY
-- [ ] 配置 PM2 进程守护
+- [ ] 支付宝商户号 / 微信支付商户号
+- [ ] PostgreSQL + Redis
+- [ ] PM2 进程守护
+- [ ] 更换密钥
 
 ---
 
@@ -505,6 +587,8 @@ npx prisma studio    # Prisma 数据库管理界面
 | 队列解耦 | API 进程不阻塞，分发任务异步执行 |
 | Token 加密存储 | 平台 Token 使用 AES-256-CBC 加密后入库 |
 | dev_user fallback | 开发调试免登录，生产环境强制鉴权 |
+| Edge CDP 方案 | 小红书创作者中心无可用 API，通过 Playwright + CDP 连接系统 Edge，DOM 提取指标 |
+| 持久化 Profile | Edge 用户数据目录保存 localStorage，重启服务保持登录态 |
 
 ---
 
