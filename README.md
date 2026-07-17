@@ -40,7 +40,7 @@
 | B站 | 开放平台 API | OAuth 绑定 + 视频发布 |
 | 微信视频号 | 第三方平台 | OAuth 绑定 + 视频发布 |
 
-> 数据看板框架已搭建（`AnalyticsService` + `DailyAnalytics` 模型），但各平台数据采集接口暂未对接，需后续按需接入。
+> 数据看板已支持自动采集抖音/B站/快手的数据（播放/点赞/评论/分享），每日定时拉取。小红书和微信暂无可用的公开数据 API。
 
 ### 去重转码流水线
 
@@ -377,6 +377,16 @@ POST /api/v1/payment/wechat/create
 ```
 GET /api/v1/payment/status?orderId=xxx
 ```
+
+### 数据看板
+
+#### 获取数据趋势
+
+```
+GET /api/analytics/trend?days=7
+```
+
+返回按平台分组的每日播放/点赞/评论/分享数据，用于前端折线图。系统每 6 小时自动从各平台拉取最新数据。
 
 ---
 

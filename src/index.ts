@@ -13,9 +13,13 @@ import { handleWxEvents } from './controllers/wx.oauth.controller';
 import { createPayment, handleAlipayNotify, queryOrderStatus } from './controllers/payment.controller';
 import { createWxPayment, handleWxPayNotify } from './controllers/wx.payment.controller';
 import { startTokenRefresher } from './services/tokenRefresher';
+import { startDataCollector } from './services/dataCollector';
 
 import { authenticate } from './middleware/auth';
 import { errorHandler } from './utils/appError';
+import { AnalyticsService } from './services/analytics.service';
+
+const analyticsService = new AnalyticsService();
 
 // ── 启动时清理临时文件（防 OOM 残留） ──
 const TEMP_DIR = path.join(__dirname, '../temp');
@@ -168,8 +172,27 @@ app.delete('/api/accounts/:id', async (req, res) => {
   }
 });
 
+// ── 数据看板 ──
+app.get('/api/analytics/trend', authenticate, async (req, res) => {
+  try {
+    const days = parseInt(req.query.days as string) || 7;
+    const data = await analyticsService.getTrend((req as any).userId, days);
+    const grouped: Record<string, any[]> = {};
+    for (const d of data) {
+      if (!grouped[d.platform]) grouped[d.platform] = [];
+      grouped[d.platform].push(d);
+    }
+    res.json(grouped);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── 启动 Token 自动续期 ──
 startTokenRefresher();
+
+// ── 启动数据采集 ──
+startDataCollector();
 
 // ── 启动 Worker ──
 startWorker().catch(err => console.error('[Worker] 启动失败:', err.message));

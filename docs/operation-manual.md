@@ -516,7 +516,7 @@ interface PublishJobData {
 
 `src/services/tokenRefresher.ts` 实现：
 
-- 每隔 **30 分钟** 检查一次
+- 每隔 **90 分钟** 检查一次
 - 查询所有 `expiresAt < 当前时间 + 1天` 的账号
 - 使用各 adapter 的 `refreshToken()` 方法刷新
 - 新 Token 加密后更新到数据库
@@ -525,6 +525,47 @@ interface PublishJobData {
 ### 9.3 启动方式
 
 应用启动时自动调用 `startTokenRefresher()`，无需额外配置。
+
+---
+
+## 10. 数据采集系统
+
+### 10.1 作用
+
+自动从各平台拉取账号的播放量、点赞、评论、分享数据，在前端看板展示趋势图表。
+
+### 10.2 采集范围
+
+| 平台 | 是否支持 | 说明 |
+|------|---------|------|
+| 抖音 | ✅ | 通过 `/video/list/` + `/video/data/` 接口获取最近 20 条视频数据 |
+| B站 | ✅ | 通过 `/platform/video/video_list` 接口获取视频统计数据 |
+| 快手 | ✅ | 通过 `/openapi/video/list` 接口获取视频统计数据 |
+| 小红书 | ❌ | 暂无可用的公开数据 API |
+| 微信视频号 | ❌ | 暂无可用的公开数据 API |
+
+### 10.3 采集时机
+
+系统每 6 小时自动采集一次（cron: `0 */6 * * *`），采集到的数据按"用户 + 日期 + 平台"维度存储，前端查看时不需实时调用平台 API。
+
+### 10.4 数据看板 API
+
+```
+GET /api/analytics/trend?days=7
+Authorization: Bearer <token>
+```
+
+返回按平台分组的每日数据：
+
+```json
+{
+  "DOUYIN": [
+    { "date": "2026-07-17", "views": 15230, "likes": 892, "comments": 45, "shares": 123 },
+    ...
+  ],
+  "BILIBILI": [...]
+}
+```
 
 ---
 

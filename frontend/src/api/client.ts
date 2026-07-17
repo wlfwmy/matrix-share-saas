@@ -47,6 +47,12 @@ export const api = {
     ),
   queryPaymentStatus: (orderId: string) =>
     api.get<{ status: string }>(`/api/v1/payment/status?orderId=${orderId}`),
+
+  // 数据看板
+  getAnalytics: (days?: number) =>
+    api.get<Record<string, { id: string; date: string; views: number; likes: number; comments: number; shares: number }[]>>(
+      `/api/analytics/trend?days=${days || 7}`,
+    ),
 };
 
 export interface Account {

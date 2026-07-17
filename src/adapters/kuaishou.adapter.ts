@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { getRedis } from '../utils/redis';
-import { PlatformOAuthAdapter, PlatformTokenResult } from './platformAdapter.interface';
+import { PlatformOAuthAdapter, PlatformTokenResult, PlatformData } from './platformAdapter.interface';
 
 const redis = getRedis();
 
@@ -46,6 +46,26 @@ export class KuaishouOAuthAdapter implements PlatformOAuthAdapter {
       refreshToken: refresh_token,
       expiresIn: expires_in,
     };
+  }
+
+  /**
+   * 拉取快手视频数据：获取用户最近视频的播放量/点赞/评论/分享
+   * 接口：/openapi/video/list → statistics
+   */
+  async fetchData(accessToken: string, openid: string, appId?: string): Promise<PlatformData> {
+    const res = await axios.get('https://open.kuaishou.com/openapi/video/list', {
+      params: { app_id: appId || process.env.KUAISHOU_APP_ID, access_token: accessToken, page: 1, size: 20 },
+    });
+    const list = res.data?.result || res.data?.data || [];
+    return list.reduce(
+      (acc: PlatformData, v: any) => ({
+        views: acc.views + (v.play_count || v.statistics?.play_count || 0),
+        likes: acc.likes + (v.like_count || v.statistics?.like_count || 0),
+        comments: acc.comments + (v.comment_count || v.statistics?.comment_count || 0),
+        shares: acc.shares + (v.share_count || v.statistics?.share_count || 0),
+      }),
+      { views: 0, likes: 0, comments: 0, shares: 0 },
+    );
   }
 
   async refreshToken(refreshToken: string) {

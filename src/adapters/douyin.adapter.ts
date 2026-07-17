@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { getRedis } from '../utils/redis';
-import { PlatformOAuthAdapter, PlatformTokenResult } from './platformAdapter.interface';
+import { PlatformOAuthAdapter, PlatformTokenResult, PlatformData } from './platformAdapter.interface';
 
 const redis = getRedis();
 
@@ -51,6 +51,37 @@ export class DouyinOAuthAdapter implements PlatformOAuthAdapter {
       refreshToken: refresh_token,
       expiresIn: expires_in,
     };
+  }
+
+  /**
+   * 拉取抖音视频数据：获取用户最近视频的播放量/点赞/评论/分享
+   * 接口文档：/video/list/ → /video/data/
+   */
+  async fetchData(accessToken: string, openid: string): Promise<PlatformData> {
+    // 1. 获取用户视频列表
+    const listRes = await axios.get('https://open.douyin.com/video/list/', {
+      params: { open_id: openid, access_token: accessToken, count: 20 },
+    });
+    const videoList = listRes.data?.data?.list;
+    if (!videoList?.length) return { views: 0, likes: 0, comments: 0, shares: 0 };
+
+    // 2. 批量查询视频统计数据
+    const videoIds = videoList.map((v: any) => v.video_id);
+    const dataRes = await axios.post('https://open.douyin.com/video/data/', {
+      open_id: openid, access_token: accessToken, video_ids: videoIds,
+    });
+    const statsList = dataRes.data?.data?.list || [];
+
+    // 3. 聚合所有视频的统计数据
+    return statsList.reduce(
+      (acc: PlatformData, s: any) => ({
+        views: acc.views + (s.statistics?.play_count || 0),
+        likes: acc.likes + (s.statistics?.digg_count || 0),
+        comments: acc.comments + (s.statistics?.comment_count || 0),
+        shares: acc.shares + (s.statistics?.share_count || 0),
+      }),
+      { views: 0, likes: 0, comments: 0, shares: 0 },
+    );
   }
 
   async refreshToken(refreshToken: string) {

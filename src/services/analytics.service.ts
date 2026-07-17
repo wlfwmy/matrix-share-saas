@@ -1,13 +1,36 @@
 /**
- * 数据统计服务 — 聚合各平台 Webhook 推送的数据
- * 按 userId + date + platform 维度记录每日数据，用于前端看板折线图
+ * 数据统计服务 — 聚合各平台数据，用于前端看板折线图
+ * 按 userId + date + platform 维度记录每日数据
  */
 
 import { prisma } from '../utils/prismaClient';
 
 export class AnalyticsService {
   /**
-   * 累加当日数据指标
+   * 设置当日数据（覆盖式写入，用于定时采集的累计数据）
+   */
+  async setMetrics(
+    userId: string,
+    platform: string,
+    data: { views: number; likes: number; comments: number; shares: number },
+  ) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    await prisma.dailyAnalytics.upsert({
+      where: {
+        userId_date_platform: { userId, date: today, platform },
+      },
+      update: { views: data.views, likes: data.likes, comments: data.comments, shares: data.shares },
+      create: {
+        userId, date: today, platform,
+        views: data.views, likes: data.likes, comments: data.comments, shares: data.shares,
+      },
+    });
+  }
+
+  /**
+   * 累加当日数据指标（用于 Webhook 增量推送）
    */
   async recordMetrics(
     userId: string,
@@ -28,9 +51,7 @@ export class AnalyticsService {
         shares: { increment: increment.shares ?? 0 },
       },
       create: {
-        userId,
-        date: today,
-        platform,
+        userId, date: today, platform,
         views: increment.views ?? 0,
         likes: increment.likes ?? 0,
         comments: increment.comments ?? 0,

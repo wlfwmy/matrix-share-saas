@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { getRedis } from '../utils/redis';
-import { PlatformOAuthAdapter, PlatformTokenResult } from './platformAdapter.interface';
+import { PlatformOAuthAdapter, PlatformTokenResult, PlatformData } from './platformAdapter.interface';
 
 const redis = getRedis();
 
@@ -46,6 +46,27 @@ export class BilibiliOAuthAdapter implements PlatformOAuthAdapter {
       refreshToken: refresh_token,
       expiresIn: expires_in,
     };
+  }
+
+  /**
+   * 拉取B站视频数据：获取用户所有视频的总播放/点赞/评论/分享
+   * 接口：/platform/video/video_list → stat
+   */
+  async fetchData(accessToken: string): Promise<PlatformData> {
+    const res = await axios.get('https://member.bilibili.com/platform/video/video_list', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      params: { page: 1, pagesize: 50 },
+    });
+    const list = res.data?.data?.list || [];
+    return list.reduce(
+      (acc: PlatformData, v: any) => ({
+        views: acc.views + (v.stat?.view ?? v.view_count ?? 0),
+        likes: acc.likes + (v.stat?.like ?? v.like_count ?? 0),
+        comments: acc.comments + (v.stat?.reply ?? v.reply_count ?? 0),
+        shares: acc.shares + (v.stat?.share ?? v.share_count ?? 0),
+      }),
+      { views: 0, likes: 0, comments: 0, shares: 0 },
+    );
   }
 
   async refreshToken(refreshToken: string) {
