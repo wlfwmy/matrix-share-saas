@@ -48,6 +48,24 @@ export const api = {
   queryPaymentStatus: (orderId: string) =>
     api.get<{ status: string }>(`/api/v1/payment/status?orderId=${orderId}`),
 
+  // 平台 Cookie 管理
+  getCookieStatus: (platform: string) =>
+    api.get<{ exists: boolean; lastTestedAt?: string; lastError?: string }>(
+      `/api/platform/cookie/${platform}`,
+    ),
+  saveCookie: (platform: string, cookie: string) =>
+    api.post<{ success: boolean }>('/api/platform/cookie', { platform, cookie }),
+  deleteCookie: (platform: string) =>
+    api.del<{ success: boolean }>(`/api/platform/cookie/${platform}`),
+  testCookie: (platform: string) =>
+    api.post<{ success: boolean; message: string }>('/api/platform/cookie/test', { platform }),
+
+  // 小红书登录管理
+  getRedLoginStatus: () =>
+    api.get<{ platform: string; loginStatus: string }>('/api/platform/red/status'),
+  startRedLogin: () =>
+    api.post<{ success: boolean; message: string }>('/api/platform/red/login'),
+
   // 数据看板
   getAnalytics: (days?: number) =>
     api.get<Record<string, { id: string; date: string; views: number; likes: number; comments: number; shares: number }[]>>(

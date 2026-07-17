@@ -172,6 +172,114 @@ app.delete('/api/accounts/:id', async (req, res) => {
   }
 });
 
+// ── 平台 Cookie 管理 ──
+app.post('/api/platform/cookie', authenticate, async (req, res) => {
+  const { platform, cookie } = req.body;
+  if (!platform || !cookie) return res.status(400).json({ error: '缺少 platform 或 cookie' });
+  if (!['RED', 'WECHAT'].includes(platform)) return res.status(400).json({ error: `不支持的平台: ${platform}` });
+  try {
+    const { encrypt } = await import('./utils/crypto');
+    const { prisma } = await import('./utils/prismaClient');
+
+    const encrypted = encrypt(cookie);
+    await prisma.platformCookie.upsert({
+      where: { userId_platform: { userId: (req as any).userId, platform } },
+      update: { encryptedCookie: encrypted, lastError: null },
+      create: { userId: (req as any).userId, platform, encryptedCookie: encrypted },
+    });
+
+    res.json({ success: true, message: 'Cookie 已保存' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || '保存失败' });
+  }
+});
+
+app.get('/api/platform/cookie/:platform', authenticate, async (req, res) => {
+  try {
+    const { prisma } = await import('./utils/prismaClient');
+    const record = await prisma.platformCookie.findUnique({
+      where: { userId_platform: { userId: (req as any).userId, platform: req.params.platform } },
+      select: { lastTestedAt: true, lastError: true, createdAt: true, updatedAt: true },
+    });
+    res.json(record || { exists: false });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/platform/cookie/:platform', authenticate, async (req, res) => {
+  try {
+    const { prisma } = await import('./utils/prismaClient');
+    await prisma.platformCookie.delete({
+      where: { userId_platform: { userId: (req as any).userId, platform: req.params.platform } },
+    });
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: '删除失败' });
+  }
+});
+
+app.post('/api/platform/cookie/test', authenticate, async (req, res) => {
+  const { platform } = req.body;
+  if (!platform) return res.status(400).json({ error: '缺少 platform' });
+  try {
+    const { decrypt } = await import('./utils/crypto');
+    const { prisma } = await import('./utils/prismaClient');
+
+    const record = await prisma.platformCookie.findUnique({
+      where: { userId_platform: { userId: (req as any).userId, platform } },
+    });
+    if (!record) return res.status(400).json({ error: 'Cookie 未配置' });
+
+    const cookie = decrypt(record.encryptedCookie);
+    const axios = (await import('axios')).default;
+
+    // 用 Cookie 请求小红书创作者中心，验证有效性
+    const resp = await axios.get('https://creator.xiaohongshu.com/api/author/data/overview', {
+      headers: {
+        Cookie: cookie,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        Referer: 'https://creator.xiaohongshu.com/',
+      },
+      timeout: 10000,
+      validateStatus: () => true,
+    });
+
+    const valid = resp.status === 200 && resp.data?.code === 0;
+    await prisma.platformCookie.update({
+      where: { userId_platform: { userId: (req as any).userId, platform } },
+      data: { lastTestedAt: new Date(), lastError: valid ? null : (resp.data?.msg || `HTTP ${resp.status}`) },
+    });
+
+    res.json({ success: valid, message: valid ? 'Cookie 有效' : 'Cookie 已过期或无效' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || '测试失败' });
+  }
+});
+
+// ── 小红书登录管理 ──
+app.get('/api/platform/red/status', authenticate, async (_req, res) => {
+  try {
+    const { checkRedLoginStatus } = await import('./services/browserManager');
+    const status = await checkRedLoginStatus();
+    res.json({ platform: 'RED', loginStatus: status });
+  } catch (err: any) {
+    res.json({ platform: 'RED', loginStatus: 'unknown' });
+  }
+});
+
+// 小红书登录：打开常驻浏览器等待用户登录
+app.post('/api/platform/red/login', authenticate, async (_req, res) => {
+  try {
+    const { waitForRedLogin } = await import('./services/browserManager');
+    // 异步等待登录，不阻塞响应
+    waitForRedLogin().then(() => console.log('[RED] 登录成功')).catch(() => {});
+    res.json({ success: true, message: '浏览器已打开，请在窗口中登录创作者中心' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || '登录启动失败' });
+  }
+});
+
 // ── 数据看板 ──
 app.get('/api/analytics/trend', authenticate, async (req, res) => {
   try {

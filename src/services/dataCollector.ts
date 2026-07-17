@@ -3,10 +3,13 @@ import { decrypt } from '../utils/crypto';
 import { prisma } from '../utils/prismaClient';
 import { AnalyticsService } from './analytics.service';
 
-// 导入各平台 adapter（它们支持 fetchData）
+// OAuth 平台 adapter（它们支持 fetchData）
 import { DouyinOAuthAdapter } from '../adapters/douyin.adapter';
 import { KuaishouOAuthAdapter } from '../adapters/kuaishou.adapter';
 import { BilibiliOAuthAdapter } from '../adapters/bilibili.adapter';
+
+// Cookie 平台 collector
+import { RedDataCollector } from '../collectors/red.collector';
 
 const analytics = new AnalyticsService();
 
@@ -15,11 +18,16 @@ interface DataFetcher {
   fetchData(accessToken: string, openid: string, appId?: string): Promise<{ views: number; likes: number; comments: number; shares: number }>;
 }
 
-const FETCHERS: DataFetcher[] = [
+// OAuth 平台：使用 accessToken/openid
+const OAUTH_FETCHERS: DataFetcher[] = [
   new DouyinOAuthAdapter(),
   new KuaishouOAuthAdapter(),
   new BilibiliOAuthAdapter(),
-  // 小红书和微信暂无可用的公开数据 API，待平台开放后接入
+];
+
+// Cookie 平台：accessToken 参数复用为 userId，内部查 PlatformCookie 表
+const COOKIE_FETCHERS: DataFetcher[] = [
+  new RedDataCollector(),
 ];
 
 export function startDataCollector() {
@@ -31,12 +39,23 @@ export function startDataCollector() {
       const accounts = await prisma.account.findMany();
 
       for (const acc of accounts) {
-        const fetcher = FETCHERS.find((f) => f.platform === acc.platform);
-        if (!fetcher) continue;
-
         try {
-          const accessToken = decrypt(acc.encryptedAccess);
-          const data = await fetcher.fetchData(accessToken, acc.openid, process.env.KUAISHOU_APP_ID);
+          let data: { views: number; likes: number; comments: number; shares: number } | null = null;
+
+          // OAuth 平台
+          const oauthFetcher = OAUTH_FETCHERS.find((f) => f.platform === acc.platform);
+          if (oauthFetcher) {
+            const accessToken = decrypt(acc.encryptedAccess);
+            data = await oauthFetcher.fetchData(accessToken, acc.openid, process.env.KUAISHOU_APP_ID);
+          }
+
+          // Cookie 平台（accessToken 参数复用为 userId）
+          const cookieFetcher = COOKIE_FETCHERS.find((f) => f.platform === acc.platform);
+          if (cookieFetcher) {
+            data = await cookieFetcher.fetchData(acc.userId, '');
+          }
+
+          if (!data) continue;
 
           // 只存有数据的记录，跳过全零
           if (data.views > 0 || data.likes > 0 || data.comments > 0 || data.shares > 0) {
