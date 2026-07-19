@@ -6,7 +6,7 @@ const PLATFORMS = [
   { id: 'DOUYIN', name: '抖音', icon: '🎵', needCookie: false },
   { id: 'KUAISHOU', name: '快手', icon: '🎬', needCookie: false },
   { id: 'BILIBILI', name: 'B站', icon: '📺', needCookie: false },
-  { id: 'WECHAT', name: '微信视频号', icon: '🟢', needCookie: true },
+  { id: 'WECHAT', name: '微信视频号', icon: '🟢', needCookie: false, needBrowser: true },
 ];
 
 interface CookieStatus {
@@ -28,21 +28,28 @@ export default function BindPage() {
   const [cookieStatuses, setCookieStatuses] = useState<Record<string, CookieStatus>>({});
   const [showInput, setShowInput] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState<Record<string, boolean>>({});
-  const [redLoginStatus, setRedLoginStatus] = useState<string>('unknown');
-  const [redLoggingIn, setRedLoggingIn] = useState(false);
+  const [browserStatuses, setBrowserStatuses] = useState<Record<string, string>>({});
+  const [browserLoggingIn, setBrowserLoggingIn] = useState<Record<string, boolean>>({});
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     api.listAccounts().then(setAccounts).catch(() => {});
     loadCookieStatuses();
-    loadRedLoginStatus();
+    loadBrowserStatuses();
   }, []);
 
-  const loadRedLoginStatus = async () => {
-    try {
-      const s = await api.getRedLoginStatus();
-      setRedLoginStatus(s.loginStatus);
-    } catch {}
+  const loadBrowserStatuses = async () => {
+    const statuses: Record<string, string> = {};
+    for (const p of PLATFORMS.filter((p) => (p as any).needBrowser)) {
+      try {
+        const key = p.id === 'RED' ? 'red' : 'wechat';
+        const s = await api.get<any>(`/api/platform/${key}/status`);
+        statuses[p.id] = s.loginStatus;
+      } catch {
+        statuses[p.id] = 'unknown';
+      }
+    }
+    setBrowserStatuses(statuses);
   };
 
   const loadCookieStatuses = async () => {
@@ -156,34 +163,55 @@ export default function BindPage() {
                 <div className="flex items-center gap-2">
                   <span
                     className={`px-2 py-0.5 text-xs rounded-lg border ${
-                      LOGIN_STATUS_LABELS[redLoginStatus]?.color || 'text-gray-400 bg-gray-50 border-gray-200'
+                      LOGIN_STATUS_LABELS[browserStatuses[p.id]]?.color || 'text-gray-400 bg-gray-50 border-gray-200'
                     }`}
                   >
-                    {LOGIN_STATUS_LABELS[redLoginStatus]?.label || '未知'}
+                    {LOGIN_STATUS_LABELS[browserStatuses[p.id]]?.label || '未知'}
                   </span>
-                  {redLoginStatus !== 'ok' && (
+                  {browserStatuses[p.id] !== 'ok' && (
                     <button
                       onClick={async () => {
-                        setRedLoggingIn(true);
+                        const key = p.id === 'RED' ? 'red' : 'wechat';
+                        setBrowserLoggingIn((prev) => ({ ...prev, [p.id]: true }));
                         try {
-                          const r = await api.startRedLogin();
+                          const startApi = p.id === 'RED' ? api.startRedLogin : api.startWeChatLogin;
+                          const statusApi = p.id === 'RED' ? api.getRedLoginStatus : api.getWeChatLoginStatus;
+                          const r = await startApi();
                           setMessage({ type: 'success', text: r.message });
                           for (let i = 0; i < 120; i++) {
                             await new Promise(r => setTimeout(r, 2000));
-                            const s = await api.getRedLoginStatus();
-                            setRedLoginStatus(s.loginStatus);
+                            const s = await statusApi();
+                            setBrowserStatuses((prev) => ({ ...prev, [p.id]: s.loginStatus }));
                             if (s.loginStatus === 'ok') break;
                           }
                         } catch (err: any) {
                           setMessage({ type: 'error', text: err.message || '登录失败' });
                         } finally {
-                          setRedLoggingIn(false);
+                          setBrowserLoggingIn((prev) => ({ ...prev, [p.id]: false }));
                         }
                       }}
-                      disabled={redLoggingIn}
+                      disabled={browserLoggingIn[p.id]}
                       className="px-3 py-0.5 text-xs text-indigo-600 hover:bg-indigo-50 rounded-lg border border-indigo-100 disabled:opacity-40"
                     >
-                      {redLoggingIn ? '登录中...' : '登录'}
+                      {browserLoggingIn[p.id] ? '登录中...' : '登录'}
+                    </button>
+                  )}
+                  {!isBound(p.id) && browserStatuses[p.id] === 'ok' && (
+                    <button
+                      onClick={async () => {
+                        try {
+                          const bindApi = p.id === 'RED' ? null : api.bindWeChat;
+                          if (!bindApi) { setMessage({ type: 'error', text: 'RED 请通过 OAuth 绑定' }); return; }
+                          const r = await bindApi();
+                          setMessage({ type: 'success', text: `${p.name} 绑定成功: ${r.nickname}` });
+                          api.listAccounts().then(setAccounts).catch(() => {});
+                        } catch (err: any) {
+                          setMessage({ type: 'error', text: err.message || '绑定失败' });
+                        }
+                      }}
+                      className="px-3 py-0.5 text-xs text-indigo-600 hover:bg-indigo-50 rounded-lg border border-indigo-100"
+                    >
+                      绑定
                     </button>
                   )}
                   {isBound(p.id) ? (

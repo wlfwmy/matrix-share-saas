@@ -71,15 +71,42 @@ model PlatformCookie {
 }
 
 model DailyAnalytics {
-  id        String   @id @default(uuid())
-  userId    String
-  date      DateTime
-  platform  String   // "RED" | "DOUYIN" | "KUAISHOU" | "BILIBILI" | "WECHAT"
-  views     Int      @default(0)
-  likes     Int      @default(0)
-  comments  Int      @default(0)
-  shares    Int      @default(0)
-  createdAt DateTime @default(now())
+  id         String   @id @default(uuid())
+  userId     String
+  accountId  String
+  platform   String   // "RED" | "DOUYIN" | "KUAISHOU" | "BILIBILI" | "WECHAT"
+  date       DateTime
+  views      Int      @default(0)
+  likes      Int      @default(0)
+  comments   Int      @default(0)
+  shares     Int      @default(0)
+  syncedAt   DateTime @default(now())
+  createdAt  DateTime @default(now())
 
-  @@unique([userId, date, platform])
+  @@unique([userId, accountId, date, platform])
+}
+
+model WebhookEvent {
+  id        String   @id @default(uuid())
+  eventId   String   @unique
+  platform  String
+  createdAt DateTime @default(now())
+}
+
+model ContentItem {
+  id          String   @id @default(uuid())
+  userId      String
+  platform    String   // "RED" | "WECHAT"
+  externalId  String   // 平台侧内容 ID
+  title       String
+  publishDate DateTime?
+  views       Int      @default(0)
+  likes       Int      @default(0)
+  comments    Int      @default(0)
+  shares      Int      @default(0)
+  collects    Int      @default(0)
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+
+  @@unique([platform, externalId])
 }

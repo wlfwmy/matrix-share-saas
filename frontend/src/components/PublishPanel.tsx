@@ -1,7 +1,13 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { api, Account } from '../api/client';
+
+const PLATFORM_LABELS: Record<string, string> = {
+  DOUYIN: '抖音', BILIBILI: 'B站', KUAISHOU: '快手', RED: '小红书', WECHAT: '微信视频号',
+};
 
 export default function PublishPanel() {
-  const [selectedAccounts, setSelectedAccounts] = useState<string[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [videoFile, setVideoFile] = useState<File | null>(null);
@@ -9,18 +15,17 @@ export default function PublishPanel() {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
 
-  const channels = [
-    { id: 'ch_1', platform: 'RED', nickname: 'WLF红染-小红书' },
-    { id: 'ch_2', platform: 'WECHAT', nickname: '红染剪辑-视频号' },
-  ];
+  useEffect(() => {
+    api.listAccounts().then(setAccounts).catch(() => {});
+  }, []);
 
   const toggleAccount = (id: string) => {
-    setSelectedAccounts(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!videoFile || selectedAccounts.length === 0) return alert('缺少视频或发布渠道！');
+    if (!videoFile || selectedIds.length === 0) return alert('缺少视频或发布渠道！');
 
     setLoading(true);
     setMsg('获取安全直传签名...');
@@ -52,8 +57,8 @@ export default function PublishPanel() {
           title,
           description,
           videoUrl: filePublicUrl,
-          accounts: selectedAccounts.map(id => {
-            const c = channels.find(item => item.id === id);
+          accounts: selectedIds.map(id => {
+            const c = accounts.find(item => item.id === id);
             return { id: c?.id, platform: c?.platform, nickname: c?.nickname };
           })
         })
@@ -80,18 +85,26 @@ export default function PublishPanel() {
         <div>
           <label className="block text-sm font-bold text-gray-700 mb-3">1. 勾选分发账号</label>
           <div className="grid grid-cols-2 gap-3">
-            {channels.map(c => (
-              <div
-                key={c.id}
-                onClick={() => toggleAccount(c.id)}
-                className={`cursor-pointer p-4 border rounded-xl flex items-center justify-between transition-all ${
-                  selectedAccounts.includes(c.id) ? 'border-indigo-600 bg-indigo-50/50 ring-2 ring-indigo-500/10' : 'border-gray-200 hover:border-gray-300'
-                }`}
-              >
-                <span className="text-sm font-semibold text-gray-700">{c.nickname}</span>
-                <input type="checkbox" checked={selectedAccounts.includes(c.id)} onChange={() => {}} className="rounded text-indigo-600" />
-              </div>
-            ))}
+            {accounts.length === 0 ? (
+              <p className="col-span-2 text-sm text-gray-400 py-4 text-center">暂无已绑定的账号，请先到「绑定账号」页面接入平台</p>
+            ) : accounts.map(a => {
+              const platformLabel = PLATFORM_LABELS[a.platform] || a.platform;
+              return (
+                <div
+                  key={a.id}
+                  onClick={() => toggleAccount(a.id)}
+                  className={`cursor-pointer p-4 border rounded-xl flex items-center justify-between transition-all ${
+                    selectedIds.includes(a.id) ? 'border-indigo-600 bg-indigo-50/50 ring-2 ring-indigo-500/10' : 'border-gray-200 hover:border-gray-300'
+                  }`}
+                >
+                  <div>
+                    <span className="text-sm font-semibold text-gray-700">{a.nickname}</span>
+                    <span className="text-xs text-gray-400 ml-2">{platformLabel}</span>
+                  </div>
+                  <input type="checkbox" checked={selectedIds.includes(a.id)} onChange={() => {}} className="rounded text-indigo-600" />
+                </div>
+              );
+            })}
           </div>
         </div>
 

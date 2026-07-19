@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { getRedis } from '../utils/redis';
-import { PlatformOAuthAdapter, PlatformTokenResult, PlatformData } from './platformAdapter.interface';
+import { PlatformOAuthAdapter, PlatformTokenResult, PlatformData, PostItem, CommentItem } from './platformAdapter.interface';
 
 const redis = getRedis();
 
@@ -66,6 +66,16 @@ export class KuaishouOAuthAdapter implements PlatformOAuthAdapter {
       }),
       { views: 0, likes: 0, comments: 0, shares: 0 },
     );
+  }
+
+  async fetchPostList(accessToken: string, openid: string, appId?: string): Promise<PostItem[]> {
+    // TODO: 调用快手 openapi/video/list 获取每篇视频的独立数据
+    return [];
+  }
+
+  async fetchComments(accessToken: string, openid: string, appId?: string): Promise<CommentItem[]> {
+    // TODO: 调用快手评论列表 API
+    return [];
   }
 
   async refreshToken(refreshToken: string) {

@@ -66,11 +66,27 @@ export const api = {
   startRedLogin: () =>
     api.post<{ success: boolean; message: string }>('/api/platform/red/login'),
 
+  // 微信视频号登录管理
+  getWeChatLoginStatus: () =>
+    api.get<{ platform: string; loginStatus: string }>('/api/platform/wechat/status'),
+  startWeChatLogin: () =>
+    api.post<{ success: boolean; message: string }>('/api/platform/wechat/login'),
+  bindWeChat: () =>
+    api.post<{ success: boolean; nickname: string }>('/api/platform/wechat/bind'),
+
   // 数据看板
   getAnalytics: (days?: number) =>
     api.get<Record<string, { id: string; date: string; views: number; likes: number; comments: number; shares: number }[]>>(
       `/api/analytics/trend?days=${days || 7}`,
     ),
+
+  // 全平台内容数据（笔记/视频列表 + 评论）
+  getPosts: (platform: string) =>
+    api.get<ContentItem[]>(`/api/collect/${platform}/posts`),
+  refreshPosts: (platform: string) =>
+    api.post<{ success: boolean }>(`/api/collect/${platform}/posts/refresh`),
+  getComments: (platform: string) =>
+    api.get<CommentItem[]>(`/api/collect/${platform}/comments`),
 };
 
 export interface Account {
@@ -79,4 +95,22 @@ export interface Account {
   nickname: string;
   avatar?: string;
   expiresAt: string;
+}
+
+export interface ContentItem {
+  id: string;
+  title: string;
+  publishDate: string | null;
+  views: number;
+  likes: number;
+  comments: number;
+  shares: number;
+  collects: number;
+}
+
+export interface CommentItem {
+  commenter: string;
+  content: string;
+  time: string;
+  likes: number;
 }

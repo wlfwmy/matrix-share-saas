@@ -13,7 +13,7 @@ import { handleWxEvents } from './controllers/wx.oauth.controller';
 import { createPayment, handleAlipayNotify, queryOrderStatus } from './controllers/payment.controller';
 import { createWxPayment, handleWxPayNotify } from './controllers/wx.payment.controller';
 import { startTokenRefresher } from './services/tokenRefresher';
-import { startDataCollector } from './services/dataCollector';
+import { startDataCollector, collectPostsForUser, fetchCommentsForUser } from './services/dataCollector';
 
 import { authenticate } from './middleware/auth';
 import { errorHandler } from './utils/appError';
@@ -280,6 +280,58 @@ app.post('/api/platform/red/login', authenticate, async (_req, res) => {
   }
 });
 
+// ── 微信视频号登录管理 ──
+app.get('/api/platform/wechat/status', authenticate, async (_req, res) => {
+  try {
+    const { checkWeChatLoginStatus } = await import('./services/browserManager');
+    const status = await checkWeChatLoginStatus();
+    res.json({ platform: 'WECHAT', loginStatus: status });
+  } catch (err: any) {
+    res.json({ platform: 'WECHAT', loginStatus: 'unknown' });
+  }
+});
+
+app.post('/api/platform/wechat/login', authenticate, async (_req, res) => {
+  try {
+    const { waitForWeChatLogin } = await import('./services/browserManager');
+    waitForWeChatLogin().then(() => console.log('[WECHAT] 登录成功')).catch(() => {});
+    res.json({ success: true, message: '浏览器已打开，请在窗口中扫码登录视频号助手' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || '登录启动失败' });
+  }
+});
+
+/** 绑定微信视频号（读取已登录的浏览器页面，自动创建 Account 记录） */
+app.post('/api/platform/wechat/bind', authenticate, async (req, res) => {
+  try {
+    const { getWeChatPage, extractWeChatAccountInfo } = await import('./services/browserManager');
+    const { prisma } = await import('./utils/prismaClient');
+
+    const page = await getWeChatPage();
+    await page.goto('https://channels.weixin.qq.com/platform', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 5000));
+    const accountInfo = await extractWeChatAccountInfo(page);
+
+    if (!accountInfo.nickname) throw new Error('无法读取视频号昵称，请确认已登录');
+    const openid = accountInfo.wxId || `wechat_${Date.now()}`;
+
+    await prisma.account.upsert({
+      where: { openid },
+      update: { nickname: accountInfo.nickname, userId: (req as any).userId },
+      create: {
+        userId: (req as any).userId, platform: 'WECHAT',
+        openid, nickname: accountInfo.nickname, avatar: '',
+        encryptedAccess: '', encryptedRefresh: '',
+        expiresAt: new Date(Date.now() + 365 * 24 * 3600 * 1000),
+      },
+    });
+
+    res.json({ success: true, nickname: accountInfo.nickname });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || '绑定失败' });
+  }
+});
+
 // ── 数据看板 ──
 app.get('/api/analytics/trend', authenticate, async (req, res) => {
   try {
@@ -293,6 +345,44 @@ app.get('/api/analytics/trend', authenticate, async (req, res) => {
     res.json(grouped);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ── 全平台内容数据 ──
+
+/** 获取已入库的笔记/视频列表 */
+app.get('/api/collect/:platform/posts', authenticate, async (req, res) => {
+  try {
+    const { platform } = req.params;
+    const posts = await analyticsService.getContentItems((req as any).userId, platform.toUpperCase());
+    res.json(posts);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** 触发刷新 — 从平台拉取最新内容列表并入库 */
+app.post('/api/collect/:platform/posts/refresh', authenticate, async (req, res) => {
+  try {
+    const { platform } = req.params;
+    await collectPostsForUser((req as any).userId, platform.toUpperCase());
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** 实时拉取评论列表（不存库，直接返回） */
+app.get('/api/collect/:platform/comments', authenticate, async (req, res) => {
+  try {
+    const { platform } = req.params;
+    const comments = await Promise.race([
+      fetchCommentsForUser((req as any).userId, platform.toUpperCase()),
+      new Promise<any[]>((_, reject) => setTimeout(() => reject(new Error('评论抓取超时')), 20000)),
+    ]);
+    res.json(comments);
+  } catch (err: any) {
+    res.json([]);
   }
 });
 

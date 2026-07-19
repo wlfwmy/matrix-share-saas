@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { getRedis } from '../utils/redis';
-import { PlatformOAuthAdapter, PlatformTokenResult, PlatformData } from './platformAdapter.interface';
+import { PlatformOAuthAdapter, PlatformTokenResult, PlatformData, PostItem, CommentItem } from './platformAdapter.interface';
 
 const redis = getRedis();
 
@@ -82,6 +82,17 @@ export class DouyinOAuthAdapter implements PlatformOAuthAdapter {
       }),
       { views: 0, likes: 0, comments: 0, shares: 0 },
     );
+  }
+
+  async fetchPostList(accessToken: string, openid: string): Promise<PostItem[]> {
+    // TODO: 调用抖音 video/list/ + video/data/ 获取每篇视频的独立数据
+    // 参考 fetchData 中的实现，但返回每篇而非聚合
+    return [];
+  }
+
+  async fetchComments(accessToken: string, openid: string): Promise<CommentItem[]> {
+    // TODO: 调用抖音 video/comment/list/ 获取评论
+    return [];
   }
 
   async refreshToken(refreshToken: string) {
