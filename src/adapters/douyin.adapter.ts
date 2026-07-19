@@ -1,6 +1,7 @@
 import axios from 'axios';
+import crypto from 'crypto';
 import { getRedis } from '../utils/redis';
-import { PlatformOAuthAdapter, PlatformTokenResult, PlatformData, PostItem, CommentItem } from './platformAdapter.interface';
+import { PlatformOAuthAdapter, PlatformTokenResult, PlatformData } from './platformAdapter.interface';
 
 const redis = getRedis();
 
@@ -10,8 +11,12 @@ export class DouyinOAuthAdapter implements PlatformOAuthAdapter {
   async getAuthUrl(userId: string): Promise<string> {
     const clientKey = process.env.DOUYIN_CLIENT_KEY;
     const redirectUri = encodeURIComponent(process.env.DOUYIN_REDIRECT_URI!);
-    const state = `douyin_${userId}_${Math.random().toString(36).substring(2, 10)}`;
+
+    // state 只需是不可预测的一次性凭证，真正的身份信任来自 Redis 映射，
+    // 不需要把 userId 明文拼进去
+    const state = crypto.randomBytes(16).toString('hex');
     await redis.set(`oauth:state:${state}`, userId, 'EX', 600);
+
     return `https://open.douyin.com/platform/oauth/connect/?client_key=${clientKey}&response_type=code&scope=video.create&redirect_uri=${redirectUri}&state=${state}`;
   }
 
@@ -23,12 +28,16 @@ export class DouyinOAuthAdapter implements PlatformOAuthAdapter {
     if (!boundUserId) throw new Error('state 无效或已过期');
     await redis.del(`oauth:state:${state}`);
 
-    const tokenRes = await axios.post('https://open.douyin.com/oauth/access_token/', {
-      client_key: process.env.DOUYIN_CLIENT_KEY,
-      client_secret: process.env.DOUYIN_CLIENT_SECRET,
-      code,
-      grant_type: 'authorization_code',
-    });
+    const tokenRes = await axios.post(
+      'https://open.douyin.com/oauth/access_token/',
+      {
+        client_key: process.env.DOUYIN_CLIENT_KEY,
+        client_secret: process.env.DOUYIN_CLIENT_SECRET,
+        code,
+        grant_type: 'authorization_code',
+      },
+      { timeout: 10000 },
+    );
 
     const data = tokenRes.data.data;
     if (data.error_code && data.error_code !== 0) {
@@ -39,6 +48,7 @@ export class DouyinOAuthAdapter implements PlatformOAuthAdapter {
 
     const userInfoRes = await axios.get('https://open.douyin.com/oauth/userinfo/', {
       params: { access_token, open_id },
+      timeout: 10000,
     });
     const userInfo = userInfoRes.data.data;
 
@@ -55,24 +65,25 @@ export class DouyinOAuthAdapter implements PlatformOAuthAdapter {
 
   /**
    * 拉取抖音视频数据：获取用户最近视频的播放量/点赞/评论/分享
-   * 接口文档：/video/list/ → /video/data/
+   * 注意：当前只拉最近 20 条视频，账号发布数超过 20 条时早期视频数据不计入汇总。
+   * 如需完整历史数据，需处理接口分页（cursor / has_more）。
    */
   async fetchData(accessToken: string, openid: string): Promise<PlatformData> {
-    // 1. 获取用户视频列表
     const listRes = await axios.get('https://open.douyin.com/video/list/', {
       params: { open_id: openid, access_token: accessToken, count: 20 },
+      timeout: 10000,
     });
     const videoList = listRes.data?.data?.list;
     if (!videoList?.length) return { views: 0, likes: 0, comments: 0, shares: 0 };
 
-    // 2. 批量查询视频统计数据
     const videoIds = videoList.map((v: any) => v.video_id);
-    const dataRes = await axios.post('https://open.douyin.com/video/data/', {
-      open_id: openid, access_token: accessToken, video_ids: videoIds,
-    });
+    const dataRes = await axios.post(
+      'https://open.douyin.com/video/data/',
+      { open_id: openid, access_token: accessToken, video_ids: videoIds },
+      { timeout: 10000 },
+    );
     const statsList = dataRes.data?.data?.list || [];
 
-    // 3. 聚合所有视频的统计数据
     return statsList.reduce(
       (acc: PlatformData, s: any) => ({
         views: acc.views + (s.statistics?.play_count || 0),
@@ -84,23 +95,16 @@ export class DouyinOAuthAdapter implements PlatformOAuthAdapter {
     );
   }
 
-  async fetchPostList(accessToken: string, openid: string): Promise<PostItem[]> {
-    // TODO: 调用抖音 video/list/ + video/data/ 获取每篇视频的独立数据
-    // 参考 fetchData 中的实现，但返回每篇而非聚合
-    return [];
-  }
-
-  async fetchComments(accessToken: string, openid: string): Promise<CommentItem[]> {
-    // TODO: 调用抖音 video/comment/list/ 获取评论
-    return [];
-  }
-
   async refreshToken(refreshToken: string) {
-    const res = await axios.post('https://open.douyin.com/oauth/refresh_token/', {
-      client_key: process.env.DOUYIN_CLIENT_KEY,
-      grant_type: 'refresh_token',
-      refresh_token: refreshToken,
-    });
+    const res = await axios.post(
+      'https://open.douyin.com/oauth/refresh_token/',
+      {
+        client_key: process.env.DOUYIN_CLIENT_KEY,
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+      },
+      { timeout: 10000 },
+    );
     const data = res.data.data;
     if (data.error_code && data.error_code !== 0) {
       throw new Error(`抖音 Token 刷新失败: ${data.description}`);

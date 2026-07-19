@@ -1,6 +1,7 @@
-import axios from 'axios';
+import crypto from 'crypto';
 import { getRedis } from '../utils/redis';
-import { PlatformOAuthAdapter, PlatformTokenResult, PlatformData, PostItem, CommentItem } from './platformAdapter.interface';
+import { http } from '../utils/httpClient';
+import { PlatformOAuthAdapter, PlatformTokenResult, PlatformData } from './platformAdapter.interface';
 
 const redis = getRedis();
 
@@ -10,8 +11,10 @@ export class KuaishouOAuthAdapter implements PlatformOAuthAdapter {
   async getAuthUrl(userId: string): Promise<string> {
     const appId = process.env.KUAISHOU_APP_ID;
     const redirectUri = encodeURIComponent(process.env.KUAISHOU_REDIRECT_URI!);
-    const state = `kuaishou_${userId}_${Math.random().toString(36).substring(2, 10)}`;
+
+    const state = crypto.randomBytes(16).toString('hex');
     await redis.set(`oauth:state:${state}`, userId, 'EX', 600);
+
     return `https://open.kuaishou.com/oauth2/authorize?app_id=${appId}&response_type=code&scope=user_info,video_publish&redirect_uri=${redirectUri}&state=${state}`;
   }
 
@@ -23,16 +26,23 @@ export class KuaishouOAuthAdapter implements PlatformOAuthAdapter {
     if (!boundUserId) throw new Error('state 无效或已过期');
     await redis.del(`oauth:state:${state}`);
 
-    const tokenRes = await axios.post('https://open.kuaishou.com/oauth2/access_token', {
+    const tokenRes = await http.post('https://open.kuaishou.com/oauth2/access_token', {
       app_id: process.env.KUAISHOU_APP_ID,
       app_secret: process.env.KUAISHOU_APP_SECRET,
       code,
       grant_type: 'authorization_code',
     });
 
-    const { access_token, refresh_token, expires_in, open_id } = tokenRes.data;
+    if (tokenRes.data.result !== undefined && tokenRes.data.result !== 1) {
+      throw new Error(`快手授权失败: ${tokenRes.data.error_msg || '未知错误'}`);
+    }
 
-    const userInfoRes = await axios.get('https://open.kuaishou.com/openapi/user_info', {
+    const { access_token, refresh_token, expires_in, open_id } = tokenRes.data;
+    if (!access_token) {
+      throw new Error('快手授权失败: 响应中缺少 access_token');
+    }
+
+    const userInfoRes = await http.get('https://open.kuaishou.com/openapi/user_info', {
       params: { access_token, app_id: process.env.KUAISHOU_APP_ID },
     });
     const userInfo = userInfoRes.data;
@@ -50,10 +60,10 @@ export class KuaishouOAuthAdapter implements PlatformOAuthAdapter {
 
   /**
    * 拉取快手视频数据：获取用户最近视频的播放量/点赞/评论/分享
-   * 接口：/openapi/video/list → statistics
+   * 注意：目前只拉第一页（size=20），视频数超过 20 条时早期视频数据不计入汇总。
    */
   async fetchData(accessToken: string, openid: string, appId?: string): Promise<PlatformData> {
-    const res = await axios.get('https://open.kuaishou.com/openapi/video/list', {
+    const res = await http.get('https://open.kuaishou.com/openapi/video/list', {
       params: { app_id: appId || process.env.KUAISHOU_APP_ID, access_token: accessToken, page: 1, size: 20 },
     });
     const list = res.data?.result || res.data?.data || [];
@@ -68,22 +78,20 @@ export class KuaishouOAuthAdapter implements PlatformOAuthAdapter {
     );
   }
 
-  async fetchPostList(accessToken: string, openid: string, appId?: string): Promise<PostItem[]> {
-    // TODO: 调用快手 openapi/video/list 获取每篇视频的独立数据
-    return [];
-  }
-
-  async fetchComments(accessToken: string, openid: string, appId?: string): Promise<CommentItem[]> {
-    // TODO: 调用快手评论列表 API
-    return [];
-  }
-
   async refreshToken(refreshToken: string) {
-    const res = await axios.post('https://open.kuaishou.com/oauth2/refresh_token', {
+    const res = await http.post('https://open.kuaishou.com/oauth2/refresh_token', {
       app_id: process.env.KUAISHOU_APP_ID,
       grant_type: 'refresh_token',
       refresh_token: refreshToken,
     });
+
+    if (res.data.result !== undefined && res.data.result !== 1) {
+      throw new Error(`快手 Token 刷新失败: ${res.data.error_msg || '未知错误'}`);
+    }
+    if (!res.data.access_token) {
+      throw new Error('快手 Token 刷新失败: 响应中缺少 access_token');
+    }
+
     return {
       accessToken: res.data.access_token,
       refreshToken: res.data.refresh_token,

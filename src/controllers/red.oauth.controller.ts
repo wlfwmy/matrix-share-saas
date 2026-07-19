@@ -51,7 +51,7 @@ export const handleRedCallback = async (req: Request, res: Response) => {
     const { nickname, avatar } = userInfoRes.data.data;
 
     await prisma.account.upsert({
-      where: { openid },
+      where: { platform_openid: { platform: 'RED', openid } },
       update: {
         encryptedAccess: encrypt(access_token),
         encryptedRefresh: encrypt(refresh_token),

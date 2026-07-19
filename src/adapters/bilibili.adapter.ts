@@ -1,6 +1,7 @@
-import axios from 'axios';
+import crypto from 'crypto';
 import { getRedis } from '../utils/redis';
-import { PlatformOAuthAdapter, PlatformTokenResult, PlatformData, PostItem, CommentItem } from './platformAdapter.interface';
+import { http } from '../utils/httpClient';
+import { PlatformOAuthAdapter, PlatformTokenResult, PlatformData } from './platformAdapter.interface';
 
 const redis = getRedis();
 
@@ -10,8 +11,10 @@ export class BilibiliOAuthAdapter implements PlatformOAuthAdapter {
   async getAuthUrl(userId: string): Promise<string> {
     const clientId = process.env.BILIBILI_CLIENT_ID;
     const redirectUri = encodeURIComponent(process.env.BILIBILI_REDIRECT_URI!);
-    const state = `bilibili_${userId}_${Math.random().toString(36).substring(2, 10)}`;
+
+    const state = crypto.randomBytes(16).toString('hex');
     await redis.set(`oauth:state:${state}`, userId, 'EX', 600);
+
     return `https://member.bilibili.com/platform/oauth/authorize?client_id=${clientId}&response_type=code&redirect_uri=${redirectUri}&state=${state}`;
   }
 
@@ -23,16 +26,20 @@ export class BilibiliOAuthAdapter implements PlatformOAuthAdapter {
     if (!boundUserId) throw new Error('state 无效或已过期');
     await redis.del(`oauth:state:${state}`);
 
-    const tokenRes = await axios.post('https://member.bilibili.com/platform/oauth/access_token', {
+    const tokenRes = await http.post('https://member.bilibili.com/platform/oauth/access_token', {
       client_id: process.env.BILIBILI_CLIENT_ID,
       client_secret: process.env.BILIBILI_CLIENT_SECRET,
       code,
       grant_type: 'authorization_code',
     });
 
+    if (tokenRes.data.code && tokenRes.data.code !== 0) {
+      throw new Error(`B站授权失败: ${tokenRes.data.message || '未知错误'}`);
+    }
+
     const { access_token, refresh_token, expires_in, mid } = tokenRes.data.data;
 
-    const userInfoRes = await axios.get('https://member.bilibili.com/platform/user/info', {
+    const userInfoRes = await http.get('https://member.bilibili.com/platform/user/info', {
       headers: { Authorization: `Bearer ${access_token}` },
     });
     const userInfo = userInfoRes.data.data;
@@ -49,11 +56,11 @@ export class BilibiliOAuthAdapter implements PlatformOAuthAdapter {
   }
 
   /**
-   * 拉取B站视频数据：获取用户所有视频的总播放/点赞/评论/分享
-   * 接口：/platform/video/video_list → stat
+   * 拉取B站视频数据：获取用户视频的播放/点赞/评论/分享
+   * 注意：目前只拉第一页（pagesize=50），视频数超过 50 条时早期视频数据不计入汇总。
    */
   async fetchData(accessToken: string): Promise<PlatformData> {
-    const res = await axios.get('https://member.bilibili.com/platform/video/video_list', {
+    const res = await http.get('https://member.bilibili.com/platform/video/video_list', {
       headers: { Authorization: `Bearer ${accessToken}` },
       params: { page: 1, pagesize: 50 },
     });
@@ -69,24 +76,23 @@ export class BilibiliOAuthAdapter implements PlatformOAuthAdapter {
     );
   }
 
-  async fetchPostList(accessToken: string, openid: string): Promise<PostItem[]> {
-    // TODO: 调用 B 站 video/video_list 获取每篇视频的独立数据
-    return [];
-  }
-
-  async fetchComments(accessToken: string, openid: string): Promise<CommentItem[]> {
-    // TODO: 调用 B 站评论列表 API
-    return [];
-  }
-
   async refreshToken(refreshToken: string) {
-    const res = await axios.post('https://member.bilibili.com/platform/oauth/refresh_token', {
+    const res = await http.post('https://member.bilibili.com/platform/oauth/refresh_token', {
       client_id: process.env.BILIBILI_CLIENT_ID,
       client_secret: process.env.BILIBILI_CLIENT_SECRET,
       grant_type: 'refresh_token',
       refresh_token: refreshToken,
     });
+
+    if (res.data.code && res.data.code !== 0) {
+      throw new Error(`B站 Token 刷新失败: ${res.data.message || '未知错误'}`);
+    }
+
     const data = res.data.data;
+    if (!data?.access_token) {
+      throw new Error('B站 Token 刷新失败: 响应中缺少 access_token');
+    }
+
     return {
       accessToken: data.access_token,
       refreshToken: data.refresh_token,

@@ -51,7 +51,7 @@ export const handleCallback = async (req: Request, res: Response) => {
     const result = await adapter.handleCallback(req.query as Record<string, string>);
 
     await prisma.account.upsert({
-      where: { openid: result.openid },
+      where: { platform_openid: { platform: adapter.platform, openid: result.openid } },
       update: {
         encryptedAccess: encrypt(result.accessToken),
         encryptedRefresh: encrypt(result.refreshToken),
@@ -73,8 +73,7 @@ export const handleCallback = async (req: Request, res: Response) => {
 
     return res.redirect(redirect(`/dashboard/channels?bind=success&platform=${platform}`));
   } catch (err: any) {
-    return res.redirect(
-      redirect(`/dashboard/channels?bind=error&msg=${encodeURIComponent(err.message)}`)
-    );
+    console.error('[OAuth] 绑定失败:', err);
+    return res.redirect(redirect('/dashboard/channels?bind=error&msg=OAuthFailed'));
   }
 };

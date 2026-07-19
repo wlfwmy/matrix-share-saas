@@ -5,6 +5,7 @@
 
 import { prisma } from '../utils/prismaClient';
 
+// 统一使用业务时区，避免服务器部署时区不同导致日期错位
 const BUSINESS_TZ_OFFSET_HOURS = 8; // Asia/Shanghai
 
 function getBusinessDateStart(): Date {
@@ -25,7 +26,7 @@ function sanitize(n: number | undefined, fieldName: string): number {
 
 export class AnalyticsService {
   /**
-   * 覆盖式写入（定时轮询平台当日累计总量时使用）
+   * 覆盖式写入（定时轮询平台"当日累计总量"时使用）
    */
   async setMetrics(
     userId: string,
@@ -50,7 +51,11 @@ export class AnalyticsService {
         create: { userId, accountId, platform, date, ...payload, syncedAt: now },
       });
     } catch (err) {
-      console.error(`[AnalyticsService] setMetrics 失败 user=${userId} account=${accountId} platform=${platform}`, err);
+      console.error(
+        `[AnalyticsService] setMetrics 失败 user=${userId} account=${accountId} platform=${platform}`,
+        err,
+      );
+      // 不向上抛出，避免一个账号失败中断整批定时任务
     }
   }
 
@@ -68,10 +73,11 @@ export class AnalyticsService {
     const date = getBusinessDateStart();
 
     try {
+      // 幂等检查：同一事件不重复计数，利用唯一约束冲突判断是否已处理过
       await prisma.webhookEvent.create({ data: { eventId, platform } });
     } catch (err: any) {
       if (err.code === 'P2002') {
-        return;
+        return; // 事件已处理过，直接跳过
       }
       console.error(`[AnalyticsService] webhook 去重检查失败 eventId=${eventId}`, err);
       return;
@@ -96,7 +102,10 @@ export class AnalyticsService {
         create: { userId, accountId, platform, date, ...payload },
       });
     } catch (err) {
-      console.error(`[AnalyticsService] recordMetrics 失败 user=${userId} account=${accountId} platform=${platform}`, err);
+      console.error(
+        `[AnalyticsService] recordMetrics 失败 user=${userId} account=${accountId} platform=${platform}`,
+        err,
+      );
     }
   }
 
@@ -116,23 +125,18 @@ export class AnalyticsService {
     });
   }
 
-  /** 保存/更新单篇内容数据 */
-  async setContentItem(
-    userId: string, platform: string, externalId: string,
-    data: { title: string; publishDate?: string | null; views: number; likes: number; comments: number; shares: number; collects: number },
-  ) {
-    await prisma.contentItem.upsert({
-      where: { platform_externalId: { platform, externalId } },
-      update: { userId, title: data.title, publishDate: data.publishDate ? new Date(data.publishDate) : null, views: data.views, likes: data.likes, comments: data.comments, shares: data.shares, collects: data.collects },
-      create: { userId, platform, externalId, title: data.title, publishDate: data.publishDate ? new Date(data.publishDate) : null, views: data.views, likes: data.likes, comments: data.comments, shares: data.shares, collects: data.collects },
-    });
-  }
-
-  /** 查询某个平台的内容列表 */
+  /** 获取指定平台已入库的内容列表 */
   async getContentItems(userId: string, platform: string) {
     return prisma.contentItem.findMany({
       where: { userId, platform },
       orderBy: { publishDate: 'desc' },
+      take: 50,
     });
   }
 }
+
+/**
+ * 注意：setMetrics（覆盖式）和 recordMetrics（增量式）不要对同一个 platform 混用。
+ * 有 Webhook 推送能力的平台只用 recordMetrics；只能轮询的平台（当前抖音/B站/快手）
+ * 只用 setMetrics。混用会导致两条更新路径互相覆盖，数据不可预测。
+ */

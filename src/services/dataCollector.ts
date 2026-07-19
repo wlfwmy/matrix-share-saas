@@ -1,155 +1,113 @@
 import cron from 'node-cron';
 import { decrypt } from '../utils/crypto';
 import { prisma } from '../utils/prismaClient';
+import { getRedis } from '../utils/redis';
 import { AnalyticsService } from './analytics.service';
-import { PostItem, CommentItem } from '../adapters/platformAdapter.interface';
 
-// OAuth 平台 adapter（它们支持 fetchData）
 import { DouyinOAuthAdapter } from '../adapters/douyin.adapter';
 import { KuaishouOAuthAdapter } from '../adapters/kuaishou.adapter';
 import { BilibiliOAuthAdapter } from '../adapters/bilibili.adapter';
-
-// Cookie 平台 collector
-import { RedDataCollector } from '../collectors/red.collector';
-import { WeChatDataCollector } from '../collectors/wechat.collector';
+import { RedOAuthAdapter } from '../adapters/red.adapter';
+import { WeChatOAuthAdapter } from '../adapters/wechat.adapter';
 
 const analytics = new AnalyticsService();
 
 interface DataFetcher {
   platform: string;
-  fetchData(accessToken: string, openid: string, appId?: string): Promise<{ views: number; likes: number; comments: number; shares: number }>;
+  fetchData(
+    accessToken: string,
+    openid: string,
+    appId?: string,
+  ): Promise<{ views: number; likes: number; comments: number; shares: number }>;
 }
 
-// OAuth 平台：使用 accessToken/openid
-const OAUTH_FETCHERS: DataFetcher[] = [
+const FETCHERS: DataFetcher[] = [
   new DouyinOAuthAdapter(),
   new KuaishouOAuthAdapter(),
   new BilibiliOAuthAdapter(),
+  // 小红书和微信暂无可用的公开数据 API，待平台开放后接入
 ];
 
-// Cookie 平台：accessToken 参数复用为 userId，内部查 PlatformCookie 表
-const COOKIE_FETCHERS: DataFetcher[] = [
-  new RedDataCollector(),
-  new WeChatDataCollector(),
-];
-
-// OAuth 平台 adapter 完整引用（含 PostItem/CommentItem 方法）
-const OAUTH_ADAPTERS = [
-  new DouyinOAuthAdapter(),
-  new KuaishouOAuthAdapter(),
-  new BilibiliOAuthAdapter(),
-];
-
-/**
- * 为指定用户+平台拉取并保存笔记/视频列表
- */
-export async function collectPostsForUser(userId: string, platform: string): Promise<void> {
-  if (platform === 'RED') {
-    const collector = new RedDataCollector();
-    await collector.collectPostList(userId);
-    return;
-  }
-  if (platform === 'WECHAT') {
-    const collector = new WeChatDataCollector();
-    await collector.collectPostList(userId);
-    return;
-  }
-
-  const adapter = OAUTH_ADAPTERS.find(a => a.platform === platform);
-  if (!adapter || !adapter.fetchPostList) {
-    console.log(`[数据采集] ${platform} 暂未实现 fetchPostList`);
-    return;
-  }
-
-  const account = await prisma.account.findFirst({ where: { userId, platform } });
-  if (!account) throw new Error(`未找到 ${platform} 账号`);
-
-  const accessToken = decrypt(account.encryptedAccess);
-  const posts = await adapter.fetchPostList(accessToken, account.openid, process.env.KUAISHOU_APP_ID);
-
-  let saved = 0;
-  for (const post of posts) {
-    await analytics.setContentItem(userId, platform, post.externalId, post);
-    saved++;
-  }
-  console.log(`[数据采集] ${platform}/${account.nickname}: 已保存 ${saved} 条内容`);
-}
-
-/**
- * 为指定用户+平台实时拉取评论列表
- */
-export async function fetchCommentsForUser(userId: string, platform: string): Promise<CommentItem[]> {
-  if (platform === 'RED') {
-    const collector = new RedDataCollector();
-    return collector.fetchComments();
-  }
-  if (platform === 'WECHAT') {
-    const collector = new WeChatDataCollector();
-    return collector.fetchComments();
-  }
-
-  const adapter = OAUTH_ADAPTERS.find(a => a.platform === platform);
-  if (!adapter || !adapter.fetchComments) {
-    console.log(`[数据采集] ${platform} 暂未实现 fetchComments`);
-    return [];
-  }
-
-  const account = await prisma.account.findFirst({ where: { userId, platform } });
-  if (!account) return [];
-
-  const accessToken = decrypt(account.encryptedAccess);
-  return adapter.fetchComments(accessToken, account.openid, process.env.KUAISHOU_APP_ID);
-}
+const LOCK_KEY = 'lock:data-collector';
+const LOCK_TTL_SECONDS = 600; // 10 分钟，覆盖任务最长可能耗时，防止卡死后永久占锁
+const THROTTLE_MS = 300; // 每个账号请求间隔，避免瞬时并发触发平台限流
 
 export function startDataCollector() {
-  // 每 6 小时执行一次
+  // 每 6 小时整点执行一次
   cron.schedule('0 */6 * * *', async () => {
+    // 分布式锁：PM2 cluster 多实例下只允许一个进程执行
+    const r = getRedis();
+    const acquired = await r.set(LOCK_KEY, '1', 'EX', LOCK_TTL_SECONDS, 'NX');
+    if (!acquired) {
+      console.log('[数据采集] 其他实例正在执行，本实例跳过');
+      return;
+    }
+
     console.log('[数据采集] 开始拉取各平台数据...');
 
     try {
       const accounts = await prisma.account.findMany();
 
+      let successCount = 0;
+      let failCount = 0;
+
       for (const acc of accounts) {
+        const fetcher = FETCHERS.find((f) => f.platform === acc.platform);
+        if (!fetcher) continue;
+
         try {
-          let data: { views: number; likes: number; comments: number; shares: number } | null = null;
+          const accessToken = decrypt(acc.encryptedAccess);
+          const data = await fetcher.fetchData(accessToken, acc.openid, process.env.KUAISHOU_APP_ID);
 
-          // OAuth 平台
-          const oauthFetcher = OAUTH_FETCHERS.find((f) => f.platform === acc.platform);
-          if (oauthFetcher) {
-            const accessToken = decrypt(acc.encryptedAccess);
-            data = await oauthFetcher.fetchData(accessToken, acc.openid, process.env.KUAISHOU_APP_ID);
-          }
-
-          // Cookie 平台（accessToken 参数复用为 userId）
-          const cookieFetcher = COOKIE_FETCHERS.find((f) => f.platform === acc.platform);
-          if (cookieFetcher) {
-            data = await cookieFetcher.fetchData(acc.userId, '');
-          }
-
-          if (!data) continue;
-
-          // 只存有数据的记录，跳过全零
-          if (data.views > 0 || data.likes > 0 || data.comments > 0 || data.shares > 0) {
-            await analytics.setMetrics(acc.userId, acc.id, acc.platform, data);
-            console.log(`[数据采集] ${acc.platform}/${acc.nickname}: 播放 ${data.views} 点赞 ${data.likes}`);
-          }
-
-          // 全平台采集笔记/视频列表
-          try {
-            await collectPostsForUser(acc.userId, acc.platform);
-          } catch (e: any) {
-            console.error(`[数据采集] ${acc.platform}/${acc.nickname} 内容列表失败: ${e.message}`);
-          }
+          // 无条件存储：真实的 0 和"接口异常"不应靠"是否全零"来区分，
+          // 异常数值由 AnalyticsService 内部 sanitize 兜底；
+          // 要求各 adapter.fetchData 在解析失败时 throw，而不是返回全零对象。
+          await analytics.setMetrics(acc.userId, acc.id, acc.platform, data);
+          console.log(`[数据采集] ${acc.platform}/${acc.nickname}: 播放 ${data.views} 点赞 ${data.likes}`);
+          successCount++;
         } catch (err: any) {
+          failCount++;
           console.error(`[数据采集] ${acc.platform}/${acc.nickname} 失败: ${err.message}`);
         }
+
+        await new Promise((r) => setTimeout(r, THROTTLE_MS));
       }
 
-      console.log('[数据采集] 本轮采集完毕');
+      console.log(`[数据采集] 本轮采集完毕，成功 ${successCount} 失败 ${failCount}`);
     } catch (err: any) {
       console.error('[数据采集] 查询数据库失败:', err.message);
+    } finally {
+      await r.del(LOCK_KEY);
     }
   });
 
-  console.log('[数据采集] 定时任务已启动 (每 6 小时)');
+  console.log('[数据采集] 定时任务已启动 (每 6 小时整点)');
+}
+
+/** 触发刷新内容列表（数据看板手动刷新入口） */
+export async function collectPostsForUser(userId: string, platform: string): Promise<void> {
+  const accounts = await prisma.account.findMany({ where: { userId, platform } });
+  for (const acc of accounts) {
+    const fetcher = FETCHERS.find((f) => f.platform === platform);
+    if (!fetcher || !('fetchPostList' in fetcher)) continue;
+    const accessToken = decrypt(acc.encryptedAccess);
+    const posts = await (fetcher as any).fetchPostList(accessToken, acc.openid);
+    for (const post of posts) {
+      await prisma.contentItem.upsert({
+        where: { platform_externalId: { platform, externalId: post.externalId } },
+        update: { title: post.title, views: post.views, likes: post.likes, comments: post.comments, shares: post.shares, collects: post.collects },
+        create: { userId, platform, externalId: post.externalId, title: post.title, publishDate: post.publishDate ? new Date(post.publishDate) : null, views: post.views, likes: post.likes, comments: post.comments, shares: post.shares, collects: post.collects },
+      });
+    }
+  }
+}
+
+/** 实时拉取评论列表 */
+export async function fetchCommentsForUser(userId: string, platform: string): Promise<any[]> {
+  const accounts = await prisma.account.findMany({ where: { userId, platform } });
+  if (accounts.length === 0) return [];
+  const fetcher = FETCHERS.find((f) => f.platform === platform);
+  if (!fetcher || !('fetchComments' in fetcher)) return [];
+  const accessToken = decrypt(accounts[0].encryptedAccess);
+  return (fetcher as any).fetchComments(accessToken, accounts[0].openid) || [];
 }

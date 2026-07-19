@@ -30,8 +30,16 @@ fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 const app = express();
 
-app.use(express.json());
+// 通过 verify 回调保存原始请求体（微信支付回调验签需要原始 body 字符串）
+app.use(express.json({
+  verify: (req, _res, buf) => {
+    (req as any).rawBody = buf.toString('utf8');
+  },
+}));
 app.use(express.urlencoded({ extended: true }));
+
+// 微信支付回调注册在 express.urlencoded 之后，
+// 因为 verify 回调已在 express.json() 中捕获了 rawBody
 
 // ── Bull Board 队列可视化（仅生产环境需要 Redis） ──
 if (process.env.NODE_ENV === 'production') {
@@ -43,7 +51,7 @@ if (process.env.NODE_ENV === 'production') {
       const serverAdapter = new ExpressAdapter();
       serverAdapter.setBasePath('/admin/queues');
       const q = await getQueue();
-      createBullBoard({ queues: [new BullMQAdapter(q as any)], serverAdapter });
+      createBullBoard({ queues: [new BullMQAdapter(q as any) as any], serverAdapter });
       app.use('/admin/queues', serverAdapter.getRouter());
       console.log('[Bull Board] 已挂载 /admin/queues');
     } catch (e) {
@@ -88,7 +96,7 @@ app.post('/api/oauth/finalize', async (req, res) => {
     const expiresAt = new Date(Date.now() + result.expiresIn * 1000);
 
     await prisma.account.upsert({
-      where: { openid: result.openid },
+      where: { platform_openid: { platform: adapter.platform, openid: result.openid } },
       update: { encryptedAccess, encryptedRefresh, expiresAt, nickname: result.nickname, avatar: result.avatar },
       create: {
         userId: result.userId || 'dev_user', platform: adapter.platform,
@@ -107,7 +115,6 @@ app.post('/api/oauth/finalize', async (req, res) => {
 app.post('/api/v1/payment/create', createPayment);
 app.post('/v1/payment/alipay/notify', handleAlipayNotify);
 app.post('/api/v1/payment/wechat/create', createWxPayment);
-app.post('/v1/payment/wechat/notify', handleWxPayNotify);
 app.get('/api/v1/payment/status', queryOrderStatus);
 
 // ── OSS 签名直传 ──
@@ -316,7 +323,7 @@ app.post('/api/platform/wechat/bind', authenticate, async (req, res) => {
     const openid = accountInfo.wxId || `wechat_${Date.now()}`;
 
     await prisma.account.upsert({
-      where: { openid },
+      where: { platform_openid: { platform: 'WECHAT', openid } },
       update: { nickname: accountInfo.nickname, userId: (req as any).userId },
       create: {
         userId: (req as any).userId, platform: 'WECHAT',

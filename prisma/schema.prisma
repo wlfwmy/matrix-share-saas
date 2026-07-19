@@ -22,7 +22,7 @@ model Account {
   id               String   @id @default(uuid())
   userId           String
   platform         String   // "RED" | "DOUYIN" | "KUAISHOU" | "BILIBILI" | "WECHAT"
-  openid           String   @unique
+  openid           String
   nickname         String
   avatar           String?
   encryptedAccess  String
@@ -30,6 +30,8 @@ model Account {
   expiresAt        DateTime
   createdAt        DateTime @default(now())
   user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([platform, openid])
 }
 
 model Order {
