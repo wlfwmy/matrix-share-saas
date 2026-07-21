@@ -521,3 +521,4 @@ npx prisma studio    # Prisma 数据库管理界面
 ---
 
 *Matrix Share SaaS — 多平台内容分发管理工具。*
+禁止私自商用，私自商用有隐患，出问题自负
